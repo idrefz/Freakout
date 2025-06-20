@@ -117,7 +117,6 @@ for i, (label, count) in enumerate(sorted(counts.items(), key=lambda x: x[1], re
     st.write(f"- **{clean_label}**: {', '.join(descriptions.get(clean_label, ['No description'])[:3]}")
         else:
             st.warning("No features found in the KML file")
-    
     with tab2:
         if line_lengths:
             st.write("**LineString Lengths by Label (meters):**")
