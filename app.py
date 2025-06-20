@@ -5,7 +5,8 @@ import os
 import math
 from collections import defaultdict
 import pandas as pd
-from io import StringIO
+from io import StringIO, BytesIO
+import re
 
 # Set page config
 st.set_page_config(
@@ -47,6 +48,10 @@ def calculate_linestring_length(coordinates):
         total_length += calculate_distance(coord1, coord2)
     return total_length
 
+def remove_encoding_declaration(xml_content):
+    """Remove XML encoding declaration to avoid parsing issues"""
+    return re.sub(r'^\s*<\?xml[^>]*\?>', '', xml_content, flags=re.MULTILINE).strip()
+
 @st.cache_data
 def process_kml_file(uploaded_file):
     """Process KML file and count all found labels"""
@@ -56,9 +61,17 @@ def process_kml_file(uploaded_file):
     descriptions = defaultdict(list)
     
     try:
-        # Read the uploaded file
-        content = uploaded_file.getvalue().decode('utf-8')
-        doc = parser.fromstring(content)
+        # Read the uploaded file as bytes first
+        content = uploaded_file.getvalue()
+        
+        try:
+            # First try parsing as bytes directly
+            doc = parser.fromstring(content)
+        except:
+            # If that fails, try decoding and removing encoding declaration
+            decoded_content = content.decode('utf-8')
+            cleaned_content = remove_encoding_declaration(decoded_content)
+            doc = parser.fromstring(cleaned_content)
         
         # Find all Placemarks in the document
         placemarks = doc.findall('.//{http://www.opengis.net/kml/2.2}Placemark')
