@@ -5,7 +5,7 @@ import os
 import math
 from collections import defaultdict
 import pandas as pd
-from io import StringIO, BytesIO
+from io import BytesIO
 import re
 
 # Set page config
@@ -55,25 +55,20 @@ def remove_encoding_declaration(xml_content):
 @st.cache_data
 def process_kml_file(uploaded_file):
     """Process KML file and count all found labels"""
-    # Initialize default dictionaries
     counts = defaultdict(int)
     line_lengths = defaultdict(float)
     descriptions = defaultdict(list)
     
     try:
-        # Read the uploaded file as bytes first
         content = uploaded_file.getvalue()
         
         try:
-            # First try parsing as bytes directly
             doc = parser.fromstring(content)
         except:
-            # If that fails, try decoding and removing encoding declaration
             decoded_content = content.decode('utf-8')
             cleaned_content = remove_encoding_declaration(decoded_content)
             doc = parser.fromstring(cleaned_content)
         
-        # Find all Placemarks in the document
         placemarks = doc.findall('.//{http://www.opengis.net/kml/2.2}Placemark')
         if not placemarks:
             return counts, line_lengths, descriptions
@@ -82,18 +77,15 @@ def process_kml_file(uploaded_file):
             name = pm.find('{http://www.opengis.net/kml/2.2}name')
             label = name.text.strip() if name is not None and name.text else "Unnamed"
             
-            # Get description if available
             desc = pm.find('{http://www.opengis.net/kml/2.2}description')
             description = desc.text.strip() if desc is not None and desc.text else "No description"
             descriptions[label].append(description)
             
-            # Process Polygon/Point
             if pm.find('.//{http://www.opengis.net/kml/2.2}Polygon') is not None:
                 counts[f"{label} (Polygon)"] += 1
             elif pm.find('.//{http://www.opengis.net/kml/2.2}Point') is not None:
                 counts[f"{label} (Point)"] += 1
             
-            # Process LineString
             linestring = pm.find('.//{http://www.opengis.net/kml/2.2}LineString')
             if linestring is not None:
                 coords = linestring.find('{http://www.opengis.net/kml/2.2}coordinates')
@@ -123,8 +115,7 @@ def display_results(counts, line_lengths, descriptions):
     """Display results in Streamlit"""
     st.subheader("📊 Processing Results")
     
-    # Create tabs for different result types
-    tab1, tab2, tab3 = st.tabs(["Feature Counts", "LineString Lengths", "Summary Statistics"])
+    tab1, tab2 = st.tabs(["Feature Counts", "LineString Lengths"])
     
     with tab1:
         if counts:
@@ -132,7 +123,6 @@ def display_results(counts, line_lengths, descriptions):
             df_counts = pd.DataFrame.from_dict(counts, orient='index', columns=['Count'])
             st.dataframe(df_counts.sort_values(by='Count', ascending=False))
             
-            # Show sample descriptions
             st.write("**Sample Descriptions:**")
             try:
                 displayed_labels = set()
@@ -153,104 +143,50 @@ def display_results(counts, line_lengths, descriptions):
         if line_lengths:
             st.write("**LineString Lengths by Label (meters):**")
             df_lengths = pd.DataFrame.from_dict(line_lengths, orient='index', columns=['Length (m)'])
-            df_lengths['Length (km)'] = df_lengths['Length (m)'] / 1000
-            st.dataframe(df_lengths.sort_values(by='Length (m)', ascending=False))
+            df_lengths['Length (km)'] = (df_lengths['Length (m)'] / 1000).round(0)
             
-            # Visualization
-            st.write("**LineString Length Visualization:**")
-            st.bar_chart(df_lengths['Length (m)'])
+            # Format numbers without decimals
+            pd.options.display.float_format = '{:,.0f}'.format
+            
+            st.dataframe(df_lengths.sort_values(by='Length (m)', ascending=False))
         else:
             st.warning("No LineStrings found in the KML file")
-    
-    with tab3:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Feature Summary:**")
-            total_features = sum(counts.values()) if counts else 0
-            unique_labels = len(set([label.split(" (")[0] for label in counts.keys()])) if counts else 0
-            
-            st.metric("Total Features", total_features)
-            st.metric("Unique Labels", unique_labels)
-            st.metric("Feature Types", len(counts))
-        
-        with col2:
-            st.write("**LineString Summary:**")
-            total_length = sum(line_lengths.values()) if line_lengths else 0
-            total_line_features = len(line_lengths) if line_lengths else 0
-            
-            st.metric("Total LineString Length (m)", f"{total_length:,.2f}")
-            st.metric("Total LineString Length (km)", f"{total_length/1000:,.2f}")
-            st.metric("LineString Features", total_line_features)
     
     # Download buttons
     st.subheader("📥 Download Results")
     
     if counts or line_lengths:
-        # Create CSV data
-        csv_data = StringIO()
-        df_combined = pd.concat([
-            pd.DataFrame.from_dict(counts, orient='index', columns=['Count']),
-            pd.DataFrame.from_dict(line_lengths, orient='index', columns=['Length (m)'])
-        ], axis=1)
-        df_combined.to_csv(csv_data)
+        # Create Excel file
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            if counts:
+                df_counts = pd.DataFrame.from_dict(counts, orient='index', columns=['Count'])
+                df_counts.to_excel(writer, sheet_name='Feature Counts')
+            
+            if line_lengths:
+                df_lengths = pd.DataFrame.from_dict(line_lengths, orient='index', columns=['Length (m)'])
+                df_lengths['Length (km)'] = (df_lengths['Length (m)'] / 1000).round(0)
+                df_lengths.to_excel(writer, sheet_name='LineString Lengths')
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.download_button(
-                label="Download Results as CSV",
-                data=csv_data.getvalue(),
-                file_name="kml_results.csv",
-                mime="text/csv"
-            )
-        
-        with col2:
-            st.download_button(
-                label="Download Summary Report",
-                data=generate_report(counts, line_lengths),
-                file_name="kml_summary.txt",
-                mime="text/plain"
-            )
-
-def generate_report(counts, line_lengths):
-    """Generate a text report summary"""
-    report = "KML PROCESSING REPORT\n=====================\n\n"
-    
-    report += "FEATURE COUNTS:\n"
-    for label, count in sorted(counts.items(), key=lambda x: x[1], reverse=True):
-        report += f"- {label}: {count}\n"
-    
-    report += "\nLINESTRING LENGTHS (meters):\n"
-    for label, length in sorted(line_lengths.items(), key=lambda x: x[1], reverse=True):
-        report += f"- {label}: {length:.2f}\n"
-    
-    # Summary
-    report += "\nSUMMARY:\n"
-    report += f"Total Features: {sum(counts.values()) if counts else 0}\n"
-    report += f"Total LineString Length: {sum(line_lengths.values()) if line_lengths else 0:.2f} meters\n"
-    report += f"Unique Labels: {len(set([label.split(' (')[0] for label in list(counts.keys()) + list(line_lengths.keys())])) if (counts or line_lengths) else 0}\n"
-    
-    return report
+        st.download_button(
+            label="Download Excel Report",
+            data=output.getvalue(),
+            file_name="kml_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 def main():
     st.title("🌍 KML Processing Tool")
-    st.markdown("""
-    Upload a KML file to count all features by label and calculate LineString lengths.
-    The tool will automatically detect and categorize all features found in the file.
-    """)
+    st.markdown("Upload a KML file to count features and calculate LineString lengths")
     
-    # File upload
     uploaded_file = st.file_uploader("Choose a KML file", type=['kml'])
     
     if uploaded_file is not None:
         st.success(f"File uploaded: {uploaded_file.name}")
         
-        # Process the file
         with st.spinner("Processing KML file..."):
             counts, line_lengths, descriptions = process_kml_file(uploaded_file)
         
-        # Display results
         display_results(counts, line_lengths, descriptions)
     else:
         st.info("Please upload a KML file to begin processing")
