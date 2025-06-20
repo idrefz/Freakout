@@ -109,13 +109,12 @@ def display_results(counts, line_lengths, descriptions):
             df_counts = pd.DataFrame.from_dict(counts, orient='index', columns=['Count'])
             st.dataframe(df_counts.sort_values(by='Count', ascending=False))
             
-            # Show sample descriptions for the first 3 labels
-            st.write("**Sample Descriptions:**")
-            for i, (label, count) in enumerate(sorted(counts.items(), key=lambda x: x[1], reverse=True)):
-                if i >= 3:
-                    break
-                clean_label = label.split(" (")[0]
-                st.write(f"- **{clean_label}**: {', '.join(descriptions.get(clean_label, ['No description'])[:3]}")
+st.write("**Sample Descriptions:**")
+for i, (label, count) in enumerate(sorted(counts.items(), key=lambda x: x[1], reverse=True)):
+    if i >= 3:
+        break
+    clean_label = label.split(" (")[0]
+    st.write(f"- **{clean_label}**: {', '.join(descriptions.get(clean_label, ['No description'])[:3]}")
         else:
             st.warning("No features found in the KML file")
     
