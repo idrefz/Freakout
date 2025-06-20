@@ -16,6 +16,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Check for required Excel packages
+try:
+    import xlsxwriter
+    EXCEL_ENGINE = 'xlsxwriter'
+except ImportError:
+    try:
+        import openpyxl
+        EXCEL_ENGINE = 'openpyxl'
+    except ImportError:
+        EXCEL_ENGINE = None
+
 @st.cache_data
 def calculate_distance(coord1, coord2):
     """Calculate distance between two coordinates (lon, lat) in meters using Haversine formula"""
@@ -60,15 +71,19 @@ def process_kml_file(uploaded_file):
     descriptions = defaultdict(list)
     
     try:
+        # Read the uploaded file as bytes first
         content = uploaded_file.getvalue()
         
         try:
+            # First try parsing as bytes directly
             doc = parser.fromstring(content)
         except:
+            # If that fails, try decoding and removing encoding declaration
             decoded_content = content.decode('utf-8')
             cleaned_content = remove_encoding_declaration(decoded_content)
             doc = parser.fromstring(cleaned_content)
         
+        # Find all Placemarks in the document
         placemarks = doc.findall('.//{http://www.opengis.net/kml/2.2}Placemark')
         if not placemarks:
             return counts, line_lengths, descriptions
@@ -77,15 +92,18 @@ def process_kml_file(uploaded_file):
             name = pm.find('{http://www.opengis.net/kml/2.2}name')
             label = name.text.strip() if name is not None and name.text else "Unnamed"
             
+            # Get description if available
             desc = pm.find('{http://www.opengis.net/kml/2.2}description')
             description = desc.text.strip() if desc is not None and desc.text else "No description"
             descriptions[label].append(description)
             
+            # Process Polygon/Point
             if pm.find('.//{http://www.opengis.net/kml/2.2}Polygon') is not None:
                 counts[f"{label} (Polygon)"] += 1
             elif pm.find('.//{http://www.opengis.net/kml/2.2}Point') is not None:
                 counts[f"{label} (Point)"] += 1
             
+            # Process LineString
             linestring = pm.find('.//{http://www.opengis.net/kml/2.2}LineString')
             if linestring is not None:
                 coords = linestring.find('{http://www.opengis.net/kml/2.2}coordinates')
@@ -156,24 +174,38 @@ def display_results(counts, line_lengths, descriptions):
     st.subheader("📥 Download Results")
     
     if counts or line_lengths:
-        # Create Excel file
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            if counts:
-                df_counts = pd.DataFrame.from_dict(counts, orient='index', columns=['Count'])
-                df_counts.to_excel(writer, sheet_name='Feature Counts')
+        if EXCEL_ENGINE is None:
+            st.warning("Excel export requires either xlsxwriter or openpyxl package. Showing data as CSV instead.")
+            csv_data = pd.concat([
+                pd.DataFrame.from_dict(counts, orient='index', columns=['Count']),
+                pd.DataFrame.from_dict(line_lengths, orient='index', columns=['Length (m)'])
+            ], axis=1).to_csv().encode('utf-8')
             
-            if line_lengths:
-                df_lengths = pd.DataFrame.from_dict(line_lengths, orient='index', columns=['Length (m)'])
-                df_lengths['Length (km)'] = (df_lengths['Length (m)'] / 1000).round(0)
-                df_lengths.to_excel(writer, sheet_name='LineString Lengths')
-        
-        st.download_button(
-            label="Download Excel Report",
-            data=output.getvalue(),
-            file_name="kml_results.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            st.download_button(
+                label="Download CSV",
+                data=csv_data,
+                file_name="kml_results.csv",
+                mime="text/csv"
+            )
+        else:
+            # Create Excel file
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine=EXCEL_ENGINE) as writer:
+                if counts:
+                    df_counts = pd.DataFrame.from_dict(counts, orient='index', columns=['Count'])
+                    df_counts.to_excel(writer, sheet_name='Feature Counts')
+                
+                if line_lengths:
+                    df_lengths = pd.DataFrame.from_dict(line_lengths, orient='index', columns=['Length (m)'])
+                    df_lengths['Length (km)'] = (df_lengths['Length (m)'] / 1000).round(0)
+                    df_lengths.to_excel(writer, sheet_name='LineString Lengths')
+            
+            st.download_button(
+                label="Download Excel Report",
+                data=output.getvalue(),
+                file_name="kml_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 def main():
     st.title("🌍 KML Processing Tool")
