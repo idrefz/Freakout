@@ -57,7 +57,8 @@ def calculate_linestring_length(coordinates):
         coord1 = coordinates[i]
         coord2 = coordinates[i+1]
         total_length += calculate_distance(coord1, coord2)
-    return total_length
+    # Round to nearest whole number
+    return round(total_length)
 
 def remove_encoding_declaration(xml_content):
     """Remove XML encoding declaration to avoid parsing issues"""
@@ -126,6 +127,9 @@ def process_kml_file(uploaded_file):
         st.error(f"XML parsing error: {str(e)}")
     except Exception as e:
         st.error(f"Error processing KML file: {str(e)}")
+    
+    # Round all accumulated lengths
+    line_lengths = {k: round(v) for k, v in line_lengths.items()}
     
     return dict(counts), dict(line_lengths), dict(descriptions)
 
