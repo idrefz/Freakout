@@ -50,24 +50,28 @@ def calculate_linestring_length(coordinates):
 @st.cache_data
 def process_kml_file(uploaded_file):
     """Process KML file and count all found labels"""
+    # Initialize default dictionaries
+    counts = defaultdict(int)
+    line_lengths = defaultdict(float)
+    descriptions = defaultdict(list)
+    
     try:
         # Read the uploaded file
-        content = uploaded_file.read().decode('utf-8')
+        content = uploaded_file.getvalue().decode('utf-8')
         doc = parser.fromstring(content)
         
-        # Using defaultdict to automatically create new entries
-        counts = defaultdict(int)
-        line_lengths = defaultdict(float)
-        descriptions = defaultdict(list)
-        
         # Find all Placemarks in the document
-        for pm in doc.findall('.//{http://www.opengis.net/kml/2.2}Placemark'):
+        placemarks = doc.findall('.//{http://www.opengis.net/kml/2.2}Placemark')
+        if not placemarks:
+            return counts, line_lengths, descriptions
+            
+        for pm in placemarks:
             name = pm.find('{http://www.opengis.net/kml/2.2}name')
-            label = name.text.strip() if name is not None else "Unnamed"
+            label = name.text.strip() if name is not None and name.text else "Unnamed"
             
             # Get description if available
             desc = pm.find('{http://www.opengis.net/kml/2.2}description')
-            description = desc.text.strip() if desc is not None else "No description"
+            description = desc.text.strip() if desc is not None and desc.text else "No description"
             descriptions[label].append(description)
             
             # Process Polygon/Point
@@ -80,21 +84,27 @@ def process_kml_file(uploaded_file):
             linestring = pm.find('.//{http://www.opengis.net/kml/2.2}LineString')
             if linestring is not None:
                 coords = linestring.find('{http://www.opengis.net/kml/2.2}coordinates')
-                if coords is not None:
-                    coord_list = []
-                    for coord_str in coords.text.strip().split():
-                        parts = coord_str.split(',')
-                        lon, lat = float(parts[0]), float(parts[1])
-                        coord_list.append((lon, lat))
-                    
-                    length = calculate_linestring_length(coord_list)
-                    line_lengths[f"{label} (LineString)"] += length
-        
-        return dict(counts), dict(line_lengths), dict(descriptions)
+                if coords is not None and coords.text:
+                    try:
+                        coord_list = []
+                        for coord_str in coords.text.strip().split():
+                            parts = coord_str.split(',')
+                            if len(parts) >= 2:
+                                lon, lat = float(parts[0]), float(parts[1])
+                                coord_list.append((lon, lat))
+                        
+                        if coord_list:
+                            length = calculate_linestring_length(coord_list)
+                            line_lengths[f"{label} (LineString)"] += length
+                    except ValueError as e:
+                        st.warning(f"Couldn't parse coordinates for {label}: {str(e)}")
     
+    except ET.ParseError as e:
+        st.error(f"XML parsing error: {str(e)}")
     except Exception as e:
         st.error(f"Error processing KML file: {str(e)}")
-        return {}, {}, {}
+    
+    return dict(counts), dict(line_lengths), dict(descriptions)
 
 def display_results(counts, line_lengths, descriptions):
     """Display results in Streamlit"""
@@ -109,16 +119,23 @@ def display_results(counts, line_lengths, descriptions):
             df_counts = pd.DataFrame.from_dict(counts, orient='index', columns=['Count'])
             st.dataframe(df_counts.sort_values(by='Count', ascending=False))
             
-# Show sample descriptions for the first 3 labels
-st.write("**Sample Descriptions:**")
-for i, (label, count) in enumerate(sorted(counts.items(), key=lambda x: x[1], reverse=True)):
-    if i >= 3:
-        break
-    clean_label = label.split(" (")[0]
-    desc_samples = descriptions.get(clean_label, ['No description'])[:3]
-    st.write(f"- **{clean_label}**: {', '.join(desc_samples)}")
-else:
-    st.warning("No features found in the KML file")
+            # Show sample descriptions
+            st.write("**Sample Descriptions:**")
+            try:
+                displayed_labels = set()
+                for i, (label, count) in enumerate(sorted(counts.items(), key=lambda x: x[1], reverse=True)):
+                    if i >= 3:
+                        break
+                    clean_label = label.split(" (")[0]
+                    if clean_label not in displayed_labels:
+                        displayed_labels.add(clean_label)
+                        desc_samples = descriptions.get(clean_label, ['No description'])[:3]
+                        st.write(f"- **{clean_label}**: {', '.join(desc_samples)}")
+            except Exception as e:
+                st.warning(f"Couldn't display descriptions: {str(e)}")
+        else:
+            st.warning("No features found in the KML file")
+    
     with tab2:
         if line_lengths:
             st.write("**LineString Lengths by Label (meters):**")
@@ -137,8 +154,8 @@ else:
         
         with col1:
             st.write("**Feature Summary:**")
-            total_features = sum(counts.values())
-            unique_labels = len(set([label.split(" (")[0] for label in counts.keys()]))
+            total_features = sum(counts.values()) if counts else 0
+            unique_labels = len(set([label.split(" (")[0] for label in counts.keys()])) if counts else 0
             
             st.metric("Total Features", total_features)
             st.metric("Unique Labels", unique_labels)
@@ -146,12 +163,12 @@ else:
         
         with col2:
             st.write("**LineString Summary:**")
-            total_length = sum(line_lengths.values())
-            total_line_features = sum(line_lengths.values())
+            total_length = sum(line_lengths.values()) if line_lengths else 0
+            total_line_features = len(line_lengths) if line_lengths else 0
             
             st.metric("Total LineString Length (m)", f"{total_length:,.2f}")
             st.metric("Total LineString Length (km)", f"{total_length/1000:,.2f}")
-            st.metric("LineString Features", len(line_lengths))
+            st.metric("LineString Features", total_line_features)
     
     # Download buttons
     st.subheader("📥 Download Results")
@@ -197,9 +214,9 @@ def generate_report(counts, line_lengths):
     
     # Summary
     report += "\nSUMMARY:\n"
-    report += f"Total Features: {sum(counts.values())}\n"
-    report += f"Total LineString Length: {sum(line_lengths.values()):.2f} meters\n"
-    report += f"Unique Labels: {len(set([label.split(' (')[0] for label in list(counts.keys()) + list(line_lengths.keys())]))}\n"
+    report += f"Total Features: {sum(counts.values()) if counts else 0}\n"
+    report += f"Total LineString Length: {sum(line_lengths.values()) if line_lengths else 0:.2f} meters\n"
+    report += f"Unique Labels: {len(set([label.split(' (')[0] for label in list(counts.keys()) + list(line_lengths.keys())])) if (counts or line_lengths) else 0}\n"
     
     return report
 
@@ -222,19 +239,6 @@ def main():
         
         # Display results
         display_results(counts, line_lengths, descriptions)
-        
-        # Show raw data option
-        if st.checkbox("Show raw data"):
-            st.subheader("Raw Data")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.write("Feature Counts:")
-                st.write(counts)
-            
-            with col2:
-                st.write("LineString Lengths:")
-                st.write(line_lengths)
     else:
         st.info("Please upload a KML file to begin processing")
 
